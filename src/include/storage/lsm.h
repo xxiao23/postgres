@@ -10,6 +10,8 @@
 
 #include "c.h"
 
+extern PGDLLIMPORT int NBuffers;
+
 /*
  * The log file contents are a sequence of 32KB blocks.
  * The only exception is that the tail of the file may contain a partial block.
@@ -39,3 +41,8 @@ typedef struct
 } LsmLogRecord;
 
 #endif                                                  /* LSM_H */
+
+/*
+ * prototypes for functions in lsm.c
+ */
+extern void InitLsmLogBlocks(void);
