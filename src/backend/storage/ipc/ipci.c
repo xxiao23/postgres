@@ -36,6 +36,7 @@
 #include "storage/bufmgr.h"
 #include "storage/dsm.h"
 #include "storage/ipc.h"
+#include "storage/lsm.h"
 #include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/predicate.h"
@@ -209,7 +210,7 @@ CreateSharedMemoryAndSemaphores(void)
 	InitShmemIndex();
 
 	/*
-	 * Set up xlog, clog, and buffers
+	 * Set up xlog, clog, and buffers, lsm
 	 */
 	XLOGShmemInit();
 	CLOGShmemInit();
@@ -217,6 +218,7 @@ CreateSharedMemoryAndSemaphores(void)
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();
 	InitBufferPool();
+        InitLsmMemtablePool();
 
 	/*
 	 * Set up lock manager

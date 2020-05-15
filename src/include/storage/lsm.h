@@ -30,7 +30,7 @@ extern PGDLLIMPORT int NBuffers;
  * LAST == 4
  */
 
-#define LSM_LOG_BLOCKSZ 32768
+#define LSM_MEMTABLE_BLOCKSZ 8192
 
 typedef struct
 {
@@ -38,11 +38,11 @@ typedef struct
   uint16 length;
   uint8  type; // One of FULL, FIRST, MIDDLE, LAST
   char*  data;
-} LsmLogRecord;
+} LsmMemtableRecord;
 
 #endif                                                  /* LSM_H */
 
 /*
  * prototypes for functions in lsm.c
  */
-extern void InitLsmLogBlocks(void);
+extern void InitLsmMemtablePool(void);
