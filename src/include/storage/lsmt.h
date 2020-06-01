@@ -10,6 +10,12 @@
 
 #include "c.h"
 
+#include "utils/relcache.h"
+
+typedef int Memtable;
+
+#define InvalidMemtable 0
+
 extern PGDLLIMPORT int NBuffers;
 
 /*
@@ -45,4 +51,4 @@ typedef struct
 /*
  * prototypes for functions in lsm.c
  */
-extern void InitLsmMemtablePool(void);
+extern void InitLsmtMemtablePool(void);

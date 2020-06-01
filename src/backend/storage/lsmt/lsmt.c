@@ -1,7 +1,7 @@
 /*-------------------------------------------------------------------------
  *
- * lsm.c
- *	 Log structure merge (LSM) tree methods
+ * lsmt.c
+ *	 Log structure merge tree methods
  *
  * IDENTIFICATION
  *	  src/backend/storage/buffer/lsm.c
@@ -11,10 +11,10 @@
 #include "postgres.h"
 
 #include "storage/buf_internals.h"
-#include "storage/lsm.h"
+#include "storage/lsmt.h"
 #include "storage/shmem.h"
 
-char *LsmMemtableBlocks;
+char *LsmtMemtableBlocks;
 
 typedef struct
 {
@@ -28,7 +28,7 @@ static HTAB *SharedMemtableHash;
  * Initialize a pool of LSM memtables and a memtable lookup table.
  */
 void
-InitLsmMemtablePool(void)
+InitLsmtMemtablePool(void)
 {
   HASHCTL info;
   int size = NBuffers + NUM_BUFFER_PARTITIONS;
@@ -36,7 +36,7 @@ InitLsmMemtablePool(void)
 
   printf("Starting InitLsmMemtablePool\n");
   printf("Creating LsmMemtableBlocks\n");
-  LsmMemtableBlocks = (char *)
+  LsmtMemtableBlocks = (char *)
       ShmemInitStruct("LSM Memtable Blocks",
                       NBuffers / 10 * (Size) LSM_MEMTABLE_BLOCKSZ, &foundBufs);
 
