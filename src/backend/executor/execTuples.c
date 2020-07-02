@@ -360,10 +360,12 @@ tts_heap_materialize(TupleTableSlot *slot)
 	slot->tts_nvalid = 0;
 	hslot->off = 0;
 
-	if (!hslot->tuple)
+	if (!hslot->tuple) {
+        ereport(DEBUG5, (errmsg("XX== tts_heap_materialize->heap_from_tuple")));
 		hslot->tuple = heap_form_tuple(slot->tts_tupleDescriptor,
 									   slot->tts_values,
 									   slot->tts_isnull);
+    }
 	else
 	{
 		/*
@@ -371,6 +373,7 @@ tts_heap_materialize(TupleTableSlot *slot)
 		 * context of the given slot (else it would have TTS_SHOULDFREE set).
 		 * Copy the tuple into the given slot's memory context.
 		 */
+        ereport(DEBUG5, (errmsg("XX== tts_heap_materialize->heap_copytuple")));
 		hslot->tuple = heap_copytuple(hslot->tuple);
 	}
 
@@ -395,6 +398,7 @@ tts_heap_copyslot(TupleTableSlot *dstslot, TupleTableSlot *srcslot)
 static HeapTuple
 tts_heap_get_heap_tuple(TupleTableSlot *slot)
 {
+    ereport(DEBUG5, (errmsg("XX== tts_heap_get_heap_tuple")));
 	HeapTupleTableSlot *hslot = (HeapTupleTableSlot *) slot;
 
 	Assert(!TTS_EMPTY(slot));
@@ -715,12 +719,16 @@ tts_buffer_heap_materialize(TupleTableSlot *slot)
 		 * tuples in a buffer slot, which then also needs to be
 		 * materializable.
 		 */
+        ereport(DEBUG5,
+                (errmsg("XX== tts_buffer_heap_materialize->heap_from_tuple")));
 		bslot->base.tuple = heap_form_tuple(slot->tts_tupleDescriptor,
 											slot->tts_values,
 											slot->tts_isnull);
 	}
 	else
 	{
+        ereport(DEBUG5,
+                (errmsg("XX== tts_buffer_heap_materialize->heap_copytuple")));
 		bslot->base.tuple = heap_copytuple(bslot->base.tuple);
 
 		/*

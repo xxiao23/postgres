@@ -243,16 +243,56 @@ heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
 	bool		shouldFree = true;
 	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
 
-	/* Update the tuple with table oid */
-	slot->tts_tableOid = RelationGetRelid(relation);
-	tuple->t_tableOid = slot->tts_tableOid;
+    /* Parse out each column name and its inserted value. */
+    int ncolumns = slot->tts_tupleDescriptor->natts;
+    Datum *values = (Datum *)palloc(ncolumns * sizeof(Datum));
+    bool *nulls = (bool *)palloc(ncolumns * sizeof(bool));
+    // Break down the tuple into fields.
+    int i;
+    int column_header_size, column_data_size;
 
-	/* Perform the insertion, and copy the resulting ItemPointer */
-	heap_insert(relation, tuple, cid, options, bistate);
-	ItemPointerCopy(&tuple->t_self, &slot->tts_tid);
+    heap_deform_tuple(tuple, slot->tts_tupleDescriptor, values, nulls);
+    ereport(DEBUG5, (errmsg("XX== number of columns: %d", ncolumns)));
+    for (i = 0; i < ncolumns; i++) {
+      if (nulls[i]) {
+        ereport(DEBUG5,
+                (errmsg("XX== column name: '%s' is null",
+                        slot->tts_tupleDescriptor->attrs[i].attname.data)));
+        continue;
+      }
+      if (slot->tts_tupleDescriptor->attrs[i].attlen == -1) {
+        // variable-length attribute
+        column_header_size = VARATT_IS_4B(values[i]) ? 4 : 1;
+        column_data_size = VARATT_IS_4B(values[i]) ? VARSIZE_4B(values[i]) - 4
+                                                   : VARSIZE_1B(values[i]) - 1;
+        ereport(DEBUG5,
+                (errmsg("XX== variable-length, column name: '%s', varhead: "
+                        "%d, varsize: %d, "
+                        "value: '%.*s'",
+                        slot->tts_tupleDescriptor->attrs[i].attname.data,
+                        column_header_size,
+                        VARATT_IS_4B(values[i]) ? VARSIZE_4B(values[i])
+                                                : VARSIZE_1B(values[i]),
+                        column_data_size,
+                        DatumGetCString(values[i]) + column_header_size)));
+      } else {
+        // fixed-length attribute
+        ereport(DEBUG5,
+                (errmsg("XX== fixed-length, column name: '%s', value: %d",
+                        slot->tts_tupleDescriptor->attrs[i].attname.data,
+                        DatumGetChar(values[i]))));
+      }
+    }
 
-	if (shouldFree)
-		pfree(tuple);
+    /* Update the tuple with table oid */
+    slot->tts_tableOid = RelationGetRelid(relation);
+    tuple->t_tableOid = slot->tts_tableOid;
+
+    /* Perform the insertion, and copy the resulting ItemPointer */
+    heap_insert(relation, tuple, cid, options, bistate);
+    ItemPointerCopy(&tuple->t_self, &slot->tts_tid);
+
+    if (shouldFree) pfree(tuple);
 }
 
 static void

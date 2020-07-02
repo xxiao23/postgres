@@ -10,9 +10,14 @@
 
 #include "c.h"
 
+#include "storage/shmem.h"
 #include "utils/relcache.h"
 
 typedef int Memtable;
+
+char *LsmtMemtableBlocks;
+
+HTAB *SharedMemtableHash;
 
 #define InvalidMemtable 0
 

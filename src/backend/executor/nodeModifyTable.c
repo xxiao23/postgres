@@ -386,9 +386,9 @@ ExecInsert(ModifyTableState *mtstate,
 	ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
 	OnConflictAction onconflict = node->onConflictAction;
 
-	ExecMaterializeSlot(slot);
+      ExecMaterializeSlot(slot);
 
-	/*
+    /*
 	 * get information on the (current) result relation
 	 */
 	resultRelInfo = estate->es_result_relation_info;
@@ -446,6 +446,8 @@ ExecInsert(ModifyTableState *mtstate,
 	}
 	else
 	{
+        ereport(DEBUG5,
+                (errmsg("XX== ExecInsert non-trigger non-fdw_routine branch")));
 		WCOKind		wco_kind;
 
 		/*
@@ -499,6 +501,7 @@ ExecInsert(ModifyTableState *mtstate,
 
 		if (onconflict != ONCONFLICT_NONE && resultRelInfo->ri_NumIndices > 0)
 		{
+            ereport(DEBUG5, (errmsg("XX== perpform a speculative insertion")));
 			/* Perform a speculative insertion. */
 			uint32		specToken;
 			ItemPointerData conflictTid;
@@ -615,6 +618,7 @@ ExecInsert(ModifyTableState *mtstate,
 		else
 		{
 			/* insert the tuple normally */
+            ereport(DEBUG5, (errmsg("XX== perpform a normal insertion")));
 			table_tuple_insert(resultRelationDesc, slot,
 							   estate->es_output_cid,
 							   0, NULL);

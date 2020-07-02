@@ -196,6 +196,7 @@ PageAddItemExtended(Page page,
 	ItemId		itemId;
 	OffsetNumber limit;
 	bool		needshuffle = false;
+    int i;
 
 	/*
 	 * Be wary about corrupted page pointers
@@ -326,6 +327,9 @@ PageAddItemExtended(Page page,
 
 	/* copy the item's data onto the page */
 	memcpy((char *) page + upper, item, size);
+    //for (i = 0; i < size; i++) {
+      //ereport(DEBUG5, (errmsg("XX== copy bytes %x", item[i])));
+    //}
 
 	/* adjust page header */
 	phdr->pd_lower = (LocationIndex) lower;

@@ -1,10 +1,10 @@
 /*-------------------------------------------------------------------------
  *
  * lsmt.c
- *	 Log structure merge tree methods
+ *    Log structure merge tree methods
  *
  * IDENTIFICATION
- *	  src/backend/storage/buffer/lsm.c
+ *    src/backend/storage/buffer/lsm.c
  *
  *-------------------------------------------------------------------------
  */
@@ -14,15 +14,11 @@
 #include "storage/lsmt.h"
 #include "storage/shmem.h"
 
-char *LsmtMemtableBlocks;
-
 typedef struct
 {
   BufferTag key;  // Tag of a memtable. Just use a BufferTag key for now.
   int id;  // Memtable ID.
 } MemtableLookupEnt;
-
-static HTAB *SharedMemtableHash;
 
 /*
  * Initialize a pool of LSM memtables and a memtable lookup table.

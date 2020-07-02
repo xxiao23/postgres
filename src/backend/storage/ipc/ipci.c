@@ -218,7 +218,7 @@ CreateSharedMemoryAndSemaphores(void)
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();
 	InitBufferPool();
-        InitLsmtMemtablePool();
+    InitLsmtMemtablePool();
 
 	/*
 	 * Set up lock manager
