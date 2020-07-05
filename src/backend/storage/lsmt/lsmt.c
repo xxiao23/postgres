@@ -12,13 +12,8 @@
 
 #include "storage/buf_internals.h"
 #include "storage/lsmt.h"
+#include "storage/relfilenode.h"
 #include "storage/shmem.h"
-
-typedef struct
-{
-  BufferTag key;  // Tag of a memtable. Just use a BufferTag key for now.
-  int id;  // Memtable ID.
-} MemtableLookupEnt;
 
 /*
  * Initialize a pool of LSM memtables and a memtable lookup table.
@@ -30,20 +25,46 @@ InitLsmtMemtablePool(void)
   int size = NBuffers + NUM_BUFFER_PARTITIONS;
   bool foundBufs;
 
-  printf("Starting InitLsmMemtablePool\n");
-  printf("Creating LsmMemtableBlocks\n");
+  ereport(DEBUG5, (errmsg("XX== InitLsmMemtablePool\n")));
+  // Create one 32K buffer to be shared among all DBs.
+  // This means when a different DB is processed,
+  // the buffer is replaced.
+  // This is just for the current development stage,
+  // not intended for the long term.
   LsmtMemtableBlocks = (char *)
-      ShmemInitStruct("LSM Memtable Blocks",
-                      NBuffers / 10 * (Size) LSM_MEMTABLE_BLOCKSZ, &foundBufs);
+      ShmemInitStruct("Shared LSMT Memtable Blocks",
+                      1 * (Size) LSMT_MEMTABLE_BLOCKSZ, &foundBufs);
 
-  info.keysize = sizeof(BufferTag);
-  info.entrysize = sizeof(MemtableLookupEnt);
+  info.keysize = sizeof(LsmtMemtableTag);
+  info.entrysize = sizeof(LsmtMemtableLookupEnt);
   info.num_partitions = NUM_BUFFER_PARTITIONS;
 
-  printf("Creating SharedMemtableHash\n");
-  SharedMemtableHash = ShmemInitHash("Shared Memtable  Lookup Table",
+  SharedMemtableHash = ShmemInitHash("Shared LSMT Memtable Lookup Table",
                                      size, size,
                                      &info,
                                      HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
-  printf("Done with InitLsmMemtablePool\n");
+}
+
+uint32
+LsmtMemtableHashCode(LsmtMemtableTag *tag_ptr)
+{
+  return get_hash_value(SharedMemtableHash, (void *) tag_ptr);
+}
+
+int
+LsmtMemtableLookUp(LsmtMemtableTag *tag_ptr, uint32 hashcode)
+{
+  LsmtMemtableLookupEnt *entry;
+
+  entry = (LsmtMemtableLookupEnt *)
+      hash_search_with_hash_value(SharedMemtableHash,
+                                  (void *) tag_ptr,
+                                  hashcode,
+                                  HASH_FIND,
+                                  NULL);
+
+  if (!entry)
+    return -1;
+
+  return entry->memtable_id;
 }

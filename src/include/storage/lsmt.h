@@ -23,6 +23,27 @@ HTAB *SharedMemtableHash;
 
 extern PGDLLIMPORT int NBuffers;
 
+/* One memtable per DB.
+ * Thus, the memtable hastable is keyed on tablespace+database.
+ */
+typedef struct
+{
+  Oid spc_node; /* tablespace */
+  Oid db_node; /* database */
+} LsmtMemtableTag;
+
+#define INIT_LSMT_MEMTABLE_TAG(a,xx_spc_node,xx_db_node) \
+( \
+	(a).spc_node = (xx_spc_node), \
+	(a).db_node = (xx_db_node) \
+)
+
+typedef struct
+{
+  LsmtMemtableTag key;
+  int memtable_id;
+} LsmtMemtableLookupEnt;
+
 /*
  * The log file contents are a sequence of 32KB blocks.
  * The only exception is that the tail of the file may contain a partial block.
@@ -41,7 +62,7 @@ extern PGDLLIMPORT int NBuffers;
  * LAST == 4
  */
 
-#define LSM_MEMTABLE_BLOCKSZ 8192
+#define LSMT_MEMTABLE_BLOCKSZ 8192
 
 typedef struct
 {
@@ -57,3 +78,5 @@ typedef struct
  * prototypes for functions in lsm.c
  */
 extern void InitLsmtMemtablePool(void);
+extern uint32 LsmtMemtableHashCode(LsmtMemtableTag*);
+extern int LsmtMemtableLookUp(LsmtMemtableTag*, uint32);

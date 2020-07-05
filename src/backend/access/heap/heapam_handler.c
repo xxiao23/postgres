@@ -38,6 +38,7 @@
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/lmgr.h"
+#include "storage/lsmt.h"
 #include "storage/predicate.h"
 #include "storage/procarray.h"
 #include "storage/smgr.h"
@@ -236,13 +237,27 @@ heapam_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot,
  * ----------------------------------------------------------------------------
  */
 
+/*
+ * Fetch the memtable for this databse.
+ */
 static void
-heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
-					int options, BulkInsertState bistate)
+get_lsmt_memtable(Relation relation)
 {
-	bool		shouldFree = true;
-	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
+  LsmtMemtableTag tag;
+  uint32 hashcode;
+  int memtable_id;
 
+  ereport(DEBUG5, (errmsg("XX== spcNode: %d, dbNode: %d",
+                          relation->rd_node.spcNode,
+                          relation->rd_node.dbNode)));
+  INIT_LSMT_MEMTABLE_TAG(tag, relation->rd_node.spcNode,
+                         relation->rd_node.dbNode);
+  hashcode = LsmtMemtableHashCode(&tag);
+}
+
+static void
+print_heap_tuple(TupleTableSlot* slot, HeapTuple tuple)
+{
     /* Parse out each column name and its inserted value. */
     int ncolumns = slot->tts_tupleDescriptor->natts;
     Datum *values = (Datum *)palloc(ncolumns * sizeof(Datum));
@@ -283,6 +298,22 @@ heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
                         DatumGetChar(values[i]))));
       }
     }
+
+    pfree(values);
+    pfree(nulls);
+}
+
+static void
+heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
+					int options, BulkInsertState bistate)
+{
+	bool		shouldFree = true;
+	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
+
+    /* begin of the LSMT dual-write section */
+    print_heap_tuple(slot, tuple);
+    get_lsmt_memtable(relation);
+    /* end of the LSMT dual-write section */
 
     /* Update the tuple with table oid */
     slot->tts_tableOid = RelationGetRelid(relation);
