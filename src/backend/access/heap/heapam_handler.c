@@ -301,7 +301,8 @@ print_heap_tuple(TupleTableSlot* slot, HeapTuple tuple, Datum* values,
 
 static int
 make_lsmt_memtable_row_key(Relation relation, TupleTableSlot *slot,
-                           HeapTuple tuple, Datum* values, char* row_key)
+                           HeapTuple tuple, Datum* values, char* row_key,
+                           Bitmapset* pk_column_bms)
 {
 	bool		result = false;
 	List	   *indexoidlist;
@@ -330,8 +331,10 @@ make_lsmt_memtable_row_key(Relation relation, TupleTableSlot *slot,
 		if (result)
         {
           int j;
-          for (j = 0; j < pg_index->indnatts; j++) {
+          for (j = 0; j < pg_index->indnatts; j++)
+          {
             int i = pg_index->indkey.values[j] - 1;
+            bms_add_member(pk_column_bms, i + 1);
             ereport(
                 DEBUG5,
                 (errmsg("XX== found primary key attribute attnum=%d", i+1)));
@@ -387,6 +390,60 @@ make_lsmt_memtable_row_key(Relation relation, TupleTableSlot *slot,
 }
 
 static void
+make_lsmt_memtable_records(TupleTableSlot* slot,
+                           HeapTuple tuple,
+                           Datum* values,
+                           bool* nulls,
+                           int ncolumns,
+                           Bitmapset* pk_column_bms)
+{
+    int i;
+    int column_header_size, column_data_size;
+
+    for (i = 0; i < ncolumns; i++) {
+      if (nulls[i]) {
+        ereport(DEBUG5,
+                (errmsg("XX== column name: '%s' is null",
+                        slot->tts_tupleDescriptor->attrs[i].attname.data)));
+        continue;
+      }
+      if (bms_is_member(i+1, pk_column_bms))
+      {
+        ereport(DEBUG5, (errmsg("XX== attnum=%d is PK, skip", i+1)));
+        continue;
+      }
+      if (slot->tts_tupleDescriptor->attrs[i].attlen == -1)
+      {
+        // variable-length attribute
+        column_header_size = VARATT_IS_4B(values[i]) ? 4 : 1;
+        column_data_size = VARATT_IS_4B(values[i]) ? VARSIZE_4B(values[i]) - 4
+                                                   : VARSIZE_1B(values[i]) - 1;
+        ereport(
+            DEBUG5,
+            (errmsg("XX== variable-length, non-PK column name: '%s', varhead: "
+                    "%d, varsize: %d, "
+                    "value: '%.*s'",
+                    slot->tts_tupleDescriptor->attrs[i].attname.data,
+                    column_header_size,
+                    VARATT_IS_4B(values[i]) ? VARSIZE_4B(values[i])
+                                            : VARSIZE_1B(values[i]),
+                    column_data_size,
+                    DatumGetCString(values[i]) + column_header_size)));
+      } else {
+        // fixed-length attribute
+        int64 data[1];
+        data[0] = DatumGetInt64(values[i]);
+        // fixed-length attribute
+        ereport(
+            DEBUG5,
+            (errmsg("XX== fixed-length, non-PK column name: '%s', value: 0x%x",
+                    slot->tts_tupleDescriptor->attrs[i].attname.data,
+                    data[0])));
+      }
+    }
+}
+
+static void
 heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
 					int options, BulkInsertState bistate)
 {
@@ -398,11 +455,16 @@ heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
     Datum *values = (Datum *)palloc(ncolumns * sizeof(Datum));
     bool *nulls = (bool *)palloc(ncolumns * sizeof(bool));
     char row_key[1024];
+    Bitmapset *pk_column_bms = bms_make_singleton(0);  /* 0 is not an attnum */
     print_heap_tuple(slot, tuple, values, nulls, ncolumns);
     get_lsmt_memtable(relation);
-    make_lsmt_memtable_row_key(relation, slot, tuple, values, row_key);
+    make_lsmt_memtable_row_key(relation, slot, tuple, values, row_key,
+                               pk_column_bms);
+    make_lsmt_memtable_records(slot, tuple, values, nulls, ncolumns,
+                               pk_column_bms);
     pfree(values);
     pfree(nulls);
+    bms_free(pk_column_bms);
     /* end of the LSMT dual-write section */
 
     /* Update the tuple with table oid */
@@ -826,10 +888,9 @@ heapam_relation_copy_data(Relation rel, const RelFileNode *newrnode)
 			RelationCopyStorage(rel->rd_smgr, dstrel, forkNum,
 								rel->rd_rel->relpersistence);
 		}
-	}
+        }
 
-
-	/* drop old relation, and close new one */
+        /* drop old relation, and close new one */
 	RelationDropStorage(rel);
 	smgrclose(dstrel);
 }

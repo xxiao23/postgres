@@ -60,6 +60,8 @@ typedef struct
  * FIRST == 2
  * MIDDLE == 3
  * LAST == 4
+ *
+ * The first 2 bytes indicates the tail of this log file.
  */
 
 #define LSMT_MEMTABLE_BLOCKSZ 32768
