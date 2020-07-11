@@ -62,7 +62,7 @@ typedef struct
  * LAST == 4
  */
 
-#define LSMT_MEMTABLE_BLOCKSZ 8192
+#define LSMT_MEMTABLE_BLOCKSZ 32768
 
 typedef struct
 {
@@ -70,7 +70,9 @@ typedef struct
   uint16 length;
   uint8  type; // One of FULL, FIRST, MIDDLE, LAST
   char*  data;
-} LsmMemtableRecord;
+} LsmtMemtableRecordData;
+
+typedef LsmtMemtableRecordData *LsmtMemtableRecord;
 
 #endif                                                  /* LSM_H */
 

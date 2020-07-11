@@ -44,6 +44,7 @@
 #include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 
 static void reform_and_rewrite_tuple(HeapTuple tuple,
 									 Relation OldHeap, Relation NewHeap,
@@ -256,12 +257,10 @@ get_lsmt_memtable(Relation relation)
 }
 
 static void
-print_heap_tuple(TupleTableSlot* slot, HeapTuple tuple)
+print_heap_tuple(TupleTableSlot* slot, HeapTuple tuple, Datum* values,
+                 bool* nulls, int ncolumns)
 {
     /* Parse out each column name and its inserted value. */
-    int ncolumns = slot->tts_tupleDescriptor->natts;
-    Datum *values = (Datum *)palloc(ncolumns * sizeof(Datum));
-    bool *nulls = (bool *)palloc(ncolumns * sizeof(bool));
     // Break down the tuple into fields.
     int i;
     int column_header_size, column_data_size;
@@ -298,9 +297,82 @@ print_heap_tuple(TupleTableSlot* slot, HeapTuple tuple)
                         DatumGetChar(values[i]))));
       }
     }
+}
 
-    pfree(values);
-    pfree(nulls);
+static int
+make_lsmt_memtable_row_key(Relation relation, TupleTableSlot *slot,
+                           HeapTuple tuple, Datum* values, char* row_key)
+{
+	bool		result = false;
+	List	   *indexoidlist;
+	ListCell   *indexoidscan;
+    int        key_len = 0;
+    int        j;
+
+	/*
+	 * Get the list of index OIDs for the table from the relcache, and look up
+	 * each one in the pg_index syscache until we find one marked primary key
+	 * (hopefully there isn't more than one such).
+	 */
+	indexoidlist = RelationGetIndexList(relation);
+
+	foreach(indexoidscan, indexoidlist)
+	{
+		Oid			indexoid = lfirst_oid(indexoidscan);
+		HeapTuple	indexTuple;
+
+		indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
+		if (!HeapTupleIsValid(indexTuple))	/* should not happen */
+			elog(ERROR, "cache lookup failed for index %u", indexoid);
+		result = ((Form_pg_index) GETSTRUCT(indexTuple))->indisprimary;
+		if (result)
+        {
+          int attnum = ((Form_pg_attribute) GETSTRUCT(indexTuple))->attnum;
+          int i = attnum;
+          ereport(DEBUG5, (errmsg("XX== found primary key attribute attnum=%d",
+                                  attnum)));
+          if (slot->tts_tupleDescriptor->attrs[i].attlen == -1) {
+            int column_header_size, column_data_size;
+            // variable-length attribute
+            column_header_size = VARATT_IS_4B(values[i]) ? 4 : 1;
+            column_data_size = VARATT_IS_4B(values[i])
+                                   ? VARSIZE_4B(values[i]) - 4
+                                   : VARSIZE_1B(values[i]) - 1;
+            ereport(DEBUG5,
+                    (errmsg("XX== variable-length PK, column name: '%s', varhead: "
+                            "%d, varsize: %d, "
+                            "value: '%.*s'",
+                            slot->tts_tupleDescriptor->attrs[i].attname.data,
+                            column_header_size,
+                            VARATT_IS_4B(values[i]) ? VARSIZE_4B(values[i])
+                                                    : VARSIZE_1B(values[i]),
+                            column_data_size,
+                            DatumGetCString(values[i]) + column_header_size)));
+          } else {
+            int64 data[1];
+            data[0] = DatumGetInt64(values[i]);
+            // fixed-length attribute
+            ereport(
+                DEBUG5,
+                (errmsg("XX== fixed-length PK, column name: '%s', value: 0x%x",
+                        slot->tts_tupleDescriptor->attrs[i].attname.data,
+                        data[0])));
+            memcpy(row_key + key_len, (void*)data, sizeof(int64));
+            key_len += 8;
+          }
+        }
+		ReleaseSysCache(indexTuple);
+	}
+
+	list_free(indexoidlist);
+
+    ereport(DEBUG5, (errmsg("XX== row key len: %d", key_len)));
+    for (j = 0; j < key_len; j++)
+    {
+      ereport(DEBUG5, (errmsg("XX== row_key[%d]: %x", j, row_key[j])));
+    }
+
+	return key_len;
 }
 
 static void
@@ -311,8 +383,15 @@ heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
 	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
 
     /* begin of the LSMT dual-write section */
-    print_heap_tuple(slot, tuple);
+    int ncolumns = slot->tts_tupleDescriptor->natts;
+    Datum *values = (Datum *)palloc(ncolumns * sizeof(Datum));
+    bool *nulls = (bool *)palloc(ncolumns * sizeof(bool));
+    char row_key[1024];
+    print_heap_tuple(slot, tuple, values, nulls, ncolumns);
     get_lsmt_memtable(relation);
+    make_lsmt_memtable_row_key(relation, slot, tuple, values, row_key);
+    pfree(values);
+    pfree(nulls);
     /* end of the LSMT dual-write section */
 
     /* Update the tuple with table oid */
