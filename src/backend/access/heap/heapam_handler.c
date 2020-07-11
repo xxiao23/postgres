@@ -320,45 +320,56 @@ make_lsmt_memtable_row_key(Relation relation, TupleTableSlot *slot,
 	{
 		Oid			indexoid = lfirst_oid(indexoidscan);
 		HeapTuple	indexTuple;
+        Form_pg_index pg_index;
 
 		indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
 		if (!HeapTupleIsValid(indexTuple))	/* should not happen */
 			elog(ERROR, "cache lookup failed for index %u", indexoid);
-		result = ((Form_pg_index) GETSTRUCT(indexTuple))->indisprimary;
+        pg_index = (Form_pg_index) GETSTRUCT(indexTuple);
+		result = pg_index->indisprimary;
 		if (result)
         {
-          int attnum = ((Form_pg_attribute) GETSTRUCT(indexTuple))->attnum;
-          int i = attnum;
-          ereport(DEBUG5, (errmsg("XX== found primary key attribute attnum=%d",
-                                  attnum)));
-          if (slot->tts_tupleDescriptor->attrs[i].attlen == -1) {
-            int column_header_size, column_data_size;
-            // variable-length attribute
-            column_header_size = VARATT_IS_4B(values[i]) ? 4 : 1;
-            column_data_size = VARATT_IS_4B(values[i])
-                                   ? VARSIZE_4B(values[i]) - 4
-                                   : VARSIZE_1B(values[i]) - 1;
-            ereport(DEBUG5,
-                    (errmsg("XX== variable-length PK, column name: '%s', varhead: "
-                            "%d, varsize: %d, "
-                            "value: '%.*s'",
-                            slot->tts_tupleDescriptor->attrs[i].attname.data,
-                            column_header_size,
-                            VARATT_IS_4B(values[i]) ? VARSIZE_4B(values[i])
-                                                    : VARSIZE_1B(values[i]),
-                            column_data_size,
-                            DatumGetCString(values[i]) + column_header_size)));
-          } else {
-            int64 data[1];
-            data[0] = DatumGetInt64(values[i]);
-            // fixed-length attribute
+          int j;
+          for (j = 0; j < pg_index->indnatts; j++) {
+            int i = pg_index->indkey.values[j] - 1;
             ereport(
                 DEBUG5,
-                (errmsg("XX== fixed-length PK, column name: '%s', value: 0x%x",
-                        slot->tts_tupleDescriptor->attrs[i].attname.data,
-                        data[0])));
-            memcpy(row_key + key_len, (void*)data, sizeof(int64));
-            key_len += 8;
+                (errmsg("XX== found primary key attribute attnum=%d", i+1)));
+            if (slot->tts_tupleDescriptor->attrs[i].attlen == -1) {
+              int column_header_size, column_data_size;
+              // variable-length attribute
+              column_header_size = VARATT_IS_4B(values[i]) ? 4 : 1;
+              column_data_size = VARATT_IS_4B(values[i])
+                                     ? VARSIZE_4B(values[i]) - 4
+                                     : VARSIZE_1B(values[i]) - 1;
+              ereport(
+                  DEBUG5,
+                  (errmsg(
+                      "XX== variable-length PK, column name: '%s', varhead: "
+                      "%d, varsize: %d, "
+                      "value: '%.*s'",
+                      slot->tts_tupleDescriptor->attrs[i].attname.data,
+                      column_header_size,
+                      VARATT_IS_4B(values[i]) ? VARSIZE_4B(values[i])
+                                              : VARSIZE_1B(values[i]),
+                      column_data_size,
+                      DatumGetCString(values[i]) + column_header_size)));
+              memcpy(row_key + key_len, DatumGetCString(values[i]),
+                     column_header_size + column_data_size);
+              key_len += column_header_size + column_data_size;
+            } else {
+              int64 data[1];
+              data[0] = DatumGetInt64(values[i]);
+              // fixed-length attribute
+              ereport(
+                  DEBUG5,
+                  (errmsg(
+                      "XX== fixed-length PK, column name: '%s', value: 0x%x",
+                      slot->tts_tupleDescriptor->attrs[i].attname.data,
+                      data[0])));
+              memcpy(row_key + key_len, (void *)data, sizeof(int64));
+              key_len += 8;
+            }
           }
         }
 		ReleaseSysCache(indexTuple);
