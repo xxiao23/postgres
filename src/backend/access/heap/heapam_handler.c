@@ -241,8 +241,8 @@ heapam_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot,
 /*
  * Fetch the memtable for this databse.
  */
-static void
-get_lsmt_memtable(Relation relation)
+static int
+get_lsmt_memtable_id(Relation relation)
 {
   LsmtMemtableTag tag;
   uint32 hashcode;
@@ -254,6 +254,10 @@ get_lsmt_memtable(Relation relation)
   INIT_LSMT_MEMTABLE_TAG(tag, relation->rd_node.spcNode,
                          relation->rd_node.dbNode);
   hashcode = LsmtMemtableHashCode(&tag);
+  memtable_id = LsmtMemtableLookUp(&tag, hashcode);
+  // TODO(xiang) return an actual memtable id, instead always
+  // the first memtable buffer.
+  return 0;
 }
 
 static void
@@ -375,10 +379,10 @@ make_lsmt_memtable_row_key(Relation relation, TupleTableSlot *slot,
             }
           }
         }
-		ReleaseSysCache(indexTuple);
-	}
+        ReleaseSysCache(indexTuple);
+    }
 
-	list_free(indexoidlist);
+    list_free(indexoidlist);
 
     ereport(DEBUG5, (errmsg("XX== row key len: %d", key_len)));
     for (j = 0; j < key_len; j++)
@@ -390,16 +394,30 @@ make_lsmt_memtable_row_key(Relation relation, TupleTableSlot *slot,
 }
 
 static void
-make_lsmt_memtable_records(TupleTableSlot* slot,
+make_lsmt_memtable_records(Relation relation,
+                           TupleTableSlot* slot,
                            HeapTuple tuple,
                            Datum* values,
                            bool* nulls,
                            int ncolumns,
-                           Bitmapset* pk_column_bms)
+                           Bitmapset* pk_column_bms,
+                           char* row_key,
+                           int row_key_len)
 {
-    int i;
-    int column_header_size, column_data_size;
+    int i, j;
+    int column_header_size, column_data_size, column_name_len;
+    int memtable_id = get_lsmt_memtable_id(relation);
+    char *my_memtable =
+        LsmtMemtableBlocks + memtable_id * LSMT_MEMTABLE_BLOCKSZ;
 
+    uint16 memtable_tail = *((uint16*) my_memtable) + 2;
+    ereport(DEBUG5,
+            (errmsg("XX== my memtable tail offset: %ld", memtable_tail)));
+    /* Append the row key first. */
+    memcpy(my_memtable + memtable_tail, row_key, row_key_len);
+    memtable_tail += row_key_len;
+
+    /* Append the column name and the column value here. */
     for (i = 0; i < ncolumns; i++) {
       if (nulls[i]) {
         ereport(DEBUG5,
@@ -412,6 +430,17 @@ make_lsmt_memtable_records(TupleTableSlot* slot,
         ereport(DEBUG5, (errmsg("XX== attnum=%d is PK, skip", i+1)));
         continue;
       }
+      // set column name.
+      column_name_len =
+          strlen(slot->tts_tupleDescriptor->attrs[i].attname.data);
+      memcpy(my_memtable + memtable_tail,
+             slot->tts_tupleDescriptor->attrs[i].attname.data, column_name_len);
+      memtable_tail += column_name_len;
+      // set checksum.
+      // TODO(xiang) not setting checksum for now.
+      *((uint32 *)(my_memtable + memtable_tail)) = 0;
+      memtable_tail += 4;
+
       if (slot->tts_tupleDescriptor->attrs[i].attlen == -1)
       {
         // variable-length attribute
@@ -429,17 +458,43 @@ make_lsmt_memtable_records(TupleTableSlot* slot,
                                             : VARSIZE_1B(values[i]),
                     column_data_size,
                     DatumGetCString(values[i]) + column_header_size)));
+        // set length.
+        *((uint16 *)(my_memtable + memtable_tail)) =
+            column_header_size + column_data_size;
+        memtable_tail += 2;
+        // set type.
+        // always use type 1 (FULL).
+        *((uint8 *)(my_memtable + memtable_tail)) = 1;
+        memtable_tail += 1;
+        memcpy(my_memtable + memtable_tail, DatumGetCString(values[i]),
+               column_header_size + column_data_size);
+        memtable_tail += column_header_size + column_data_size;
       } else {
         // fixed-length attribute
         int64 data[1];
         data[0] = DatumGetInt64(values[i]);
-        // fixed-length attribute
         ereport(
             DEBUG5,
             (errmsg("XX== fixed-length, non-PK column name: '%s', value: 0x%x",
                     slot->tts_tupleDescriptor->attrs[i].attname.data,
                     data[0])));
+        // set length.
+        *((uint16 *)(my_memtable + memtable_tail)) = 8;
+        memtable_tail += 2;
+        // set type.
+        // always use type 1 (FULL).
+        *((uint8 *)(my_memtable + memtable_tail)) = 1;
+        memtable_tail += 1;
+        memcpy(my_memtable + memtable_tail, (void *)data, sizeof(int64));
+        memtable_tail += sizeof(int64);
       }
+    }
+    *((uint16*)my_memtable) = memtable_tail - 2;
+
+    ereport(DEBUG5, (errmsg("XX== record len: %d", memtable_tail)));
+    for (j = 0; j < memtable_tail; j++)
+    {
+      ereport(DEBUG5, (errmsg("XX== record[%d]: %x", j, my_memtable[j])));
     }
 }
 
@@ -455,13 +510,13 @@ heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
     Datum *values = (Datum *)palloc(ncolumns * sizeof(Datum));
     bool *nulls = (bool *)palloc(ncolumns * sizeof(bool));
     char row_key[1024];
+    int row_key_len;
     Bitmapset *pk_column_bms = bms_make_singleton(0);  /* 0 is not an attnum */
     print_heap_tuple(slot, tuple, values, nulls, ncolumns);
-    get_lsmt_memtable(relation);
-    make_lsmt_memtable_row_key(relation, slot, tuple, values, row_key,
-                               pk_column_bms);
-    make_lsmt_memtable_records(slot, tuple, values, nulls, ncolumns,
-                               pk_column_bms);
+    row_key_len = make_lsmt_memtable_row_key(relation, slot, tuple, values,
+                                             row_key, pk_column_bms);
+    make_lsmt_memtable_records(relation, slot, tuple, values, nulls, ncolumns,
+                               pk_column_bms, row_key, row_key_len);
     pfree(values);
     pfree(nulls);
     bms_free(pk_column_bms);
